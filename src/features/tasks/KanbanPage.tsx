@@ -22,6 +22,21 @@ const URGENCY_TONE: Record<Urgency, string> = {
 const today = () => new Date().toISOString().slice(0, 10)
 const overdue = (d: string | null) => !!d && d < today()
 
+/** Due-date filter buckets. */
+function matchesDate(due: string | null, filter: string): boolean {
+  if (!filter) return true
+  if (filter === 'none') return !due
+  if (!due) return false
+  const td = today()
+  if (filter === 'overdue') return due < td
+  if (filter === 'today') return due === td
+  if (filter === 'week') {
+    const wk = new Date(Date.now() + 7 * 86_400_000).toISOString().slice(0, 10)
+    return due >= td && due <= wk
+  }
+  return true
+}
+
 // --- card -----------------------------------------------------------------
 function TaskCard({
   task,
@@ -35,7 +50,12 @@ function TaskCard({
   return (
     <div
       draggable
-      onDragStart={() => onDragStart(task.id)}
+      onDragStart={(e) => {
+        // Firefox/Zen require dataTransfer to be set or the drag never starts.
+        e.dataTransfer.setData('text/plain', task.id)
+        e.dataTransfer.effectAllowed = 'move'
+        onDragStart(task.id)
+      }}
       onClick={() => onOpen(task)}
       className="relative cursor-pointer overflow-hidden rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] p-3 pl-4 text-sm hover:border-[var(--color-accent)] transition-colors"
     >
@@ -75,7 +95,7 @@ function Column({
   tasks: TaskRow[]
   isFirst: boolean
   isLast: boolean
-  onDrop: (columnId: string) => void
+  onDrop: (columnId: string, droppedId?: string) => void
   onAdd: (columnId: string, title: string) => void
   onRename: (id: string, title: string) => void
   onDelete: (id: string) => void
@@ -119,7 +139,7 @@ function Column({
       <div
         onDragOver={(e) => { e.preventDefault(); setOver(true) }}
         onDragLeave={() => setOver(false)}
-        onDrop={() => { setOver(false); onDrop(col.id) }}
+        onDrop={(e) => { setOver(false); onDrop(col.id, e.dataTransfer.getData('text/plain')) }}
         className={`flex min-h-24 flex-1 flex-col gap-2 p-2 transition-colors ${over ? 'bg-[var(--color-surface-2)]' : ''}`}
       >
         {tasks.map((t) => (
@@ -246,6 +266,7 @@ function Board() {
   const [editing, setEditing] = useState<TaskRow | null>(null)
   const [assigneeFilter, setAssigneeFilter] = useState('')
   const [urgencyFilter, setUrgencyFilter] = useState('')
+  const [dateFilter, setDateFilter] = useState('')
   const [search, setSearch] = useState('')
   const dragId = useRef<string | null>(null)
 
@@ -272,9 +293,10 @@ function Board() {
         (t) =>
           (!assigneeFilter || t.assignee === assigneeFilter) &&
           (!urgencyFilter || t.urgency === urgencyFilter) &&
+          matchesDate(t.due_date, dateFilter) &&
           (!search || `${t.title} ${t.description ?? ''}`.toLowerCase().includes(search.toLowerCase())),
       ),
-    [tasks, assigneeFilter, urgencyFilter, search],
+    [tasks, assigneeFilter, urgencyFilter, dateFilter, search],
   )
 
   const tasksFor = (col: TaskColumnRow, index: number) =>
@@ -282,8 +304,8 @@ function Board() {
       .filter((t) => t.column_id === col.id || (t.column_id == null && index === 0))
       .sort((a, b) => a.position - b.position || (a.due_date ?? '9999').localeCompare(b.due_date ?? '9999'))
 
-  async function onDrop(columnId: string) {
-    const id = dragId.current
+  async function onDrop(columnId: string, droppedId?: string) {
+    const id = droppedId || dragId.current
     dragId.current = null
     if (!id) return
     const maxPos = Math.max(0, ...tasks.filter((t) => t.column_id === columnId).map((t) => t.position))
@@ -329,6 +351,13 @@ function Board() {
           <option value="high">high</option>
           <option value="medium">medium</option>
           <option value="low">low</option>
+        </Select>
+        <Select value={dateFilter} onChange={(e) => setDateFilter(e.target.value)}>
+          <option value="">Any date</option>
+          <option value="overdue">Overdue</option>
+          <option value="today">Due today</option>
+          <option value="week">Due this week</option>
+          <option value="none">No date</option>
         </Select>
         <Button variant="ghost" className="ml-auto" onClick={addColumn}>+ Column</Button>
       </div>
