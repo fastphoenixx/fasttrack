@@ -1,0 +1,44 @@
+@import 'tailwindcss';
+
+/* Fonts (Space Grotesk + JetBrains Mono) are loaded via <link> in index.html.
+   QuartzFilters-inspired identity: cream paper, peach as the Signal, ink text.
+   Editorial, dry, signal-vs-noise. Space Grotesk for display, JetBrains Mono
+   for every number / label / metadatum. */
+@theme {
+  --color-bg: #ebe9da; /* creme — the paper */
+  --color-surface: #f2f0e2; /* panels */
+  --color-surface-2: #f8edcf; /* amarelo-claro — aux panels / hover */
+  --color-border: #d6d1be; /* darker creme */
+  --color-text: #1c1a14; /* tinta */
+  --color-muted: #6f6a59; /* warm gray */
+
+  --color-signal: #fbc6b6; /* pêssego — soft signal bands / fills */
+  --color-accent: #da6e52; /* deeper peach — readable text accent / interactive */
+
+  --color-deficit: #4f7d63; /* sage */
+  --color-surplus: #c0863a; /* ochre */
+  --color-protein: #6e62a6; /* muted indigo */
+  --color-danger: #b4452f; /* brick */
+
+  --font-display: 'Space Grotesk', system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, monospace;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  background-color: var(--color-bg);
+  color: var(--color-text);
+  font-family: system-ui, 'Segoe UI', Roboto, sans-serif;
+}
+
+h1,
+h2,
+h3 {
+  font-family: var(--font-display);
+  letter-spacing: -0.015em;
+}
