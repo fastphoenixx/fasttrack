@@ -3,6 +3,7 @@ import { CalculatorsPage } from './features/calculators/CalculatorsPage'
 import { DashboardPage } from './features/dashboard/DashboardPage'
 import { DailyLogPage } from './features/daily-log/DailyLogPage'
 import { HistoryPage } from './features/history/HistoryPage'
+import { FastingPage } from './features/fasting/FastingPage'
 import { TrainingPage } from './features/training/TrainingPage'
 import { ImportPage } from './features/data/ImportPage'
 import { ProfilePage } from './features/profile/ProfilePage'
@@ -11,6 +12,7 @@ import { isConfigured } from './db/client'
 
 const NAV = [
   { to: '/dashboard', label: 'Dashboard' },
+  { to: '/fasting', label: 'Fasting' },
   { to: '/history', label: 'History' },
   { to: '/training', label: 'Training' },
   { to: '/tasks', label: 'Tasks' },
@@ -72,6 +74,7 @@ export default function App() {
         <Routes>
           <Route path="/" element={<Navigate to="/dashboard" replace />} />
           <Route path="/dashboard" element={<DashboardPage />} />
+          <Route path="/fasting" element={<FastingPage />} />
           <Route path="/history" element={<HistoryPage />} />
           <Route path="/training" element={<TrainingPage />} />
           <Route path="/import" element={<ImportPage />} />
