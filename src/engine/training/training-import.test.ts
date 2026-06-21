@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import { classifyExercise } from './muscles'
-import { setVolumeLoad, weeklyExerciseSeries, weeklyVolumeByMuscle, weekStart } from './volume'
+import { setVolumeLoad, weeklyExerciseSeries, weeklySetsByMuscle, weeklyVolumeByMuscle, weekStart } from './volume'
 import type { VolumePoint } from './volume'
+import { landmarkFor } from './landmarks'
 import { groupHevyRows, parseHevyDateTime, type HevyRow } from '../import/hevy'
 
 describe('classifyExercise', () => {
@@ -100,6 +101,24 @@ describe('volume aggregation', () => {
     expect(weeks).toHaveLength(1)
     expect(weeks[0].back).toBe(720) // warmup excluded
     expect(weeks[0].chest).toBe(800)
+  })
+
+  it('counts weekly working sets per muscle (warmups excluded)', () => {
+    const pts: VolumePoint[] = [
+      { date: '2026-06-20', exerciseTitle: 'Bench', muscle: 'chest', weightKg: 80, reps: 8, setType: 'normal' },
+      { date: '2026-06-20', exerciseTitle: 'Bench', muscle: 'chest', weightKg: 80, reps: 8, setType: 'normal' },
+      { date: '2026-06-20', exerciseTitle: 'Bench', muscle: 'chest', weightKg: 40, reps: 10, setType: 'warmup' },
+      { date: '2026-06-20', exerciseTitle: 'Row', muscle: 'back', weightKg: 60, reps: 10, setType: 'normal' },
+    ]
+    const { muscles, weeks } = weeklySetsByMuscle(pts)
+    expect(muscles).toEqual(['back', 'chest'])
+    expect(weeks[0].chest).toBe(2) // warmup not counted
+    expect(weeks[0].back).toBe(1)
+  })
+
+  it('exposes RP volume landmarks per muscle (and null for unmapped)', () => {
+    expect(landmarkFor('chest')).toEqual({ mev: 8, mav: 16, mrv: 22 })
+    expect(landmarkFor('cardio')).toBeNull()
   })
 
   it('builds a per-exercise series with best est 1RM', () => {

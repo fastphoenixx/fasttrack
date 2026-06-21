@@ -1,15 +1,21 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useMemo, useState } from 'react'
 import {
+  Area,
+  Bar,
+  Cell,
   CartesianGrid,
+  ComposedChart,
   Legend,
   Line,
-  LineChart,
+  ReferenceLine,
   ResponsiveContainer,
+  Scatter,
   Tooltip,
   XAxis,
   YAxis,
 } from 'recharts'
 import { AuthGate } from '../auth/AuthGate'
+import { useFetch } from '../../lib/useFetch'
 import { getCurrentProfile, getLogRange } from '../../db/queries'
 import type { DailyLogRow, ProfileRow } from '../../db/types'
 import {
@@ -23,8 +29,11 @@ import {
 import { today, daysAgo } from '../../lib/dates'
 import { logsToCsv, downloadCsv } from '../data/csv'
 import { Button, Card, Stat } from '../../ui/components'
+import { ChartTooltip, Gradient, TimeRange } from '../../ui/charts'
+import { C, axisProps, gridProps, lastNDays } from '../../ui/chart-theme'
 
-/** Estimate a day's expenditure from the profile + that day's logged weight. */
+const FAST_TYPES = new Set(['extended_water', 'dry', 'religious', 'omad'])
+
 function expenditureFor(profile: ProfileRow | null, weightKg: number | null): number {
   if (!profile || !weightKg) return 0
   return estimateExpenditure({
@@ -38,9 +47,6 @@ function expenditureFor(profile: ProfileRow | null, weightKg: number | null): nu
   })
 }
 
-const TOOLTIP = { background: '#f2f0e2', border: '1px solid #d6d1be', color: '#1c1a14' }
-const FAST_TYPES = new Set(['extended_water', 'dry', 'religious', 'omad'])
-
 function Charts({ rows, profile }: { rows: DailyLogRow[]; profile: ProfileRow | null }) {
   const m = useMemo(() => {
     const energy = rows.map((r) => ({
@@ -52,120 +58,182 @@ function Charts({ rows, profile }: { rows: DailyLogRow[]; profile: ProfileRow | 
       rows.map((r) => ({ date: r.log_date, weight: r.weight_kg })),
       0.25,
     )
-
+    const std = trend.residualStd
     const cumFatArr = energy.reduce<number[]>(
       (acc, e) => [...acc, (acc.at(-1) ?? 0) + dailyFatLossKg(e.intake, e.expenditure)],
       [],
     )
+
     const series = rows.map((r, i) => {
       const t = trend.series[i].trend
+      const intake = energy[i].intake
+      const exp = energy[i].expenditure
       return {
         date: r.log_date.slice(5),
         weight: r.weight_kg,
         trend: t == null ? null : +t.toFixed(2),
+        band: t == null ? null : ([+(t - std).toFixed(2), +(t + std).toFixed(2)] as [number, number]),
         cumFat: +cumFatArr[i].toFixed(2),
         cumBalance: Math.round(cum[i]),
+        intake: intake || null,
+        expenditure: exp ? Math.round(exp) : null,
+        deficitDay: exp > 0 && intake <= exp,
       }
     })
 
+    // previous weigh-in helper for fast decomposition
+    const prevWeight = (i: number): number | null => {
+      for (let j = i - 1; j >= 0; j--) if (rows[j].weight_kg != null) return rows[j].weight_kg
+      return null
+    }
+    const fastDecomp = rows
+      .map((r, i) => {
+        if (!r.fast_type || !FAST_TYPES.has(r.fast_type) || r.weight_kg == null) return null
+        const prev = prevWeight(i)
+        if (prev == null || prev <= r.weight_kg) return null
+        const d = decomposeFastLoss(prev - r.weight_kg, r.fasting_hours ?? 24, energy[i].expenditure - energy[i].intake)
+        return {
+          date: r.log_date.slice(5),
+          water: +d.glycogenWaterKg.toFixed(2),
+          fat: +d.fatLossKg.toFixed(2),
+          other: +d.otherKg.toFixed(2),
+        }
+      })
+      .filter((x): x is NonNullable<typeof x> => x != null)
+
     const last = energy[energy.length - 1]
     const fatToday = last ? dailyFatLossKg(last.intake, last.expenditure) : 0
-
-    // Most recent fasting day with a drop vs the previous weigh-in → reality check.
-    let recentFast: { date: string; observed: number; fatKg: number; waterKg: number } | null = null
-    for (let i = rows.length - 1; i > 0 && !recentFast; i--) {
-      const r = rows[i]
-      if (!r.fast_type || !FAST_TYPES.has(r.fast_type) || r.weight_kg == null) continue
-      let prev: number | null = null
-      for (let j = i - 1; j >= 0; j--) {
-        if (rows[j].weight_kg != null) { prev = rows[j].weight_kg; break }
-      }
-      if (prev != null && prev > r.weight_kg) {
-        const d = decomposeFastLoss(prev - r.weight_kg, r.fasting_hours ?? 24, energy[i].expenditure - energy[i].intake)
-        recentFast = { date: r.log_date, observed: d.observedLossKg, fatKg: d.fatLossKg, waterKg: d.glycogenWaterKg }
-      }
-    }
+    const withExp = energy.filter((e) => e.expenditure > 0)
+    const avgDeficit = withExp.length
+      ? Math.round(withExp.reduce((s, e) => s + (e.expenditure - e.intake), 0) / withExp.length)
+      : 0
+    const recent = fastDecomp.at(-1)
 
     return {
       series,
-      totalNet: cum.length ? Math.round(cum[cum.length - 1]) : 0,
+      fastDecomp,
+      totalNet: cum.at(-1) ?? 0,
       fatToday,
       cumFat: cumFatArr.at(-1) ?? 0,
       deviation: trend.lastDeviation,
-      noise: trend.residualStd,
-      recentFast,
+      noise: std,
+      avgDeficit,
+      recent,
     }
   }, [rows, profile])
 
   return (
     <>
-      {/* Hero row — the honest answer for the anxious daily weigher. */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <Stat label="Fat lost today (est.)" value={m.fatToday.toFixed(2)} unit="kg" tone="var(--color-deficit)" />
-        <Stat label="True fat lost · period" value={m.cumFat.toFixed(2)} unit="kg" tone="var(--color-deficit)" />
+        <Stat label="Fat lost today (est.)" value={m.fatToday.toFixed(2)} unit="kg" tone={C.fat} />
+        <Stat label="True fat lost · period" value={m.cumFat.toFixed(2)} unit="kg" tone={C.fat} />
         <Stat
           label="Scale vs trend today"
           value={m.deviation == null ? '—' : `${m.deviation > 0 ? '+' : ''}${m.deviation.toFixed(2)}`}
           unit="kg"
-          tone="var(--color-muted)"
+          tone={C.axis}
         />
         <Stat label="Days logged" value={String(rows.length)} />
       </div>
 
       <p className="text-xs text-[var(--color-muted)] -mt-2">
-        Fat loss is estimated from your energy deficit (≈ deficit ÷ 7700 kcal/kg), not the scale —
-        daily weight swings are mostly water &amp; glycogen. An estimate, not a measurement.
+        Fat loss is estimated from your energy deficit (≈ deficit ÷ 7700 kcal/kg), not the scale — daily
+        weight swings are mostly water &amp; glycogen. An estimate, not a measurement.
       </p>
 
-      {m.recentFast && (
+      {m.recent && (
         <div className="rounded-xl border border-[var(--color-border)] bg-[var(--color-signal)] px-5 py-4 text-sm">
-          On <span className="font-mono">{m.recentFast.date}</span> the scale dropped{' '}
-          <span className="font-mono font-semibold">{m.recentFast.observed.toFixed(1)} kg</span> — but only ~
-          <span className="font-mono font-semibold">{m.recentFast.fatKg.toFixed(2)} kg</span> was fat.
-          About <span className="font-mono font-semibold">{m.recentFast.waterKg.toFixed(1)} kg</span> was
-          glycogen + water and comes back when you refeed. Don't panic.
+          Last fast (<span className="font-mono">{m.recent.date}</span>): scale dropped{' '}
+          <span className="font-mono font-semibold">{(m.recent.water + m.recent.fat + m.recent.other).toFixed(1)} kg</span>,
+          but only ~<span className="font-mono font-semibold">{m.recent.fat.toFixed(2)} kg</span> was fat. ~
+          <span className="font-mono font-semibold">{m.recent.water.toFixed(1)} kg</span> was glycogen + water and
+          returns on refeed. Don't panic.
         </div>
+      )}
+
+      <Card title={`Bodyweight — trend vs scale (daily noise ±${m.noise.toFixed(2)} kg)`}>
+        <ResponsiveContainer width="100%" height={260}>
+          <ComposedChart data={m.series}>
+            <CartesianGrid {...gridProps} />
+            <XAxis dataKey="date" {...axisProps} />
+            <YAxis {...axisProps} domain={['dataMin - 1', 'dataMax + 1']} />
+            <Tooltip content={<ChartTooltip unit="kg" />} />
+            <Legend wrapperStyle={{ fontSize: 12 }} />
+            <Area dataKey="band" name="noise band" stroke="none" fill={C.signal} fillOpacity={0.5} legendType="none" />
+            <Scatter dataKey="weight" name="scale" fill={C.scale} />
+            <Line type="monotone" dataKey="trend" name="trend" stroke={C.trend} dot={false} strokeWidth={2.5} connectNulls />
+          </ComposedChart>
+        </ResponsiveContainer>
+      </Card>
+
+      <Card title="Calories in vs expenditure">
+        <ResponsiveContainer width="100%" height={240}>
+          <ComposedChart data={m.series}>
+            <CartesianGrid {...gridProps} />
+            <XAxis dataKey="date" {...axisProps} />
+            <YAxis {...axisProps} />
+            <Tooltip content={<ChartTooltip unit="kcal" />} />
+            <Legend wrapperStyle={{ fontSize: 12 }} />
+            <Bar dataKey="intake" name="intake">
+              {m.series.map((d, i) => (
+                <Cell key={i} fill={d.deficitDay ? C.deficit : C.surplus} />
+              ))}
+            </Bar>
+            <Line type="monotone" dataKey="expenditure" name="expenditure" stroke={C.trend} dot={false} strokeWidth={2} connectNulls />
+          </ComposedChart>
+        </ResponsiveContainer>
+        <p className="mt-2 text-xs text-[var(--color-muted)]">
+          On average{' '}
+          <span className="font-mono">
+            {Math.abs(m.avgDeficit).toLocaleString()} kcal {m.avgDeficit >= 0 ? 'below' : 'above'}
+          </span>{' '}
+          expenditure per day.
+        </p>
+      </Card>
+
+      {m.fastDecomp.length > 0 && (
+        <Card title="Fast-loss reality — glycogen/water vs true fat (kg)">
+          <ResponsiveContainer width="100%" height={220}>
+            <ComposedChart data={m.fastDecomp}>
+              <CartesianGrid {...gridProps} />
+              <XAxis dataKey="date" {...axisProps} />
+              <YAxis {...axisProps} />
+              <Tooltip content={<ChartTooltip unit="kg" />} />
+              <Legend wrapperStyle={{ fontSize: 12 }} />
+              <Bar dataKey="water" name="glycogen + water" stackId="d" fill={C.scale} />
+              <Bar dataKey="fat" name="true fat" stackId="d" fill={C.trend} />
+              <Bar dataKey="other" name="other" stackId="d" fill={C.surplus} fillOpacity={0.5} />
+            </ComposedChart>
+          </ResponsiveContainer>
+        </Card>
       )}
 
       <Card title="True fat lost — cumulative (kg)">
         <ResponsiveContainer width="100%" height={220}>
-          <LineChart data={m.series}>
-            <CartesianGrid stroke="#d6d1be" strokeDasharray="3 3" />
-            <XAxis dataKey="date" stroke="#6f6a59" fontSize={12} />
-            <YAxis stroke="#6f6a59" fontSize={12} />
-            <Tooltip contentStyle={TOOLTIP} />
-            <Line type="monotone" dataKey="cumFat" name="fat lost" stroke="#4f7d63" dot={false} strokeWidth={2.5} />
-          </LineChart>
-        </ResponsiveContainer>
-      </Card>
-
-      <Card title={`Bodyweight — trend vs scale (daily noise ±${m.noise.toFixed(2)} kg)`}>
-        <ResponsiveContainer width="100%" height={240}>
-          <LineChart data={m.series}>
-            <CartesianGrid stroke="#d6d1be" strokeDasharray="3 3" />
-            <XAxis dataKey="date" stroke="#6f6a59" fontSize={12} />
-            <YAxis stroke="#6f6a59" fontSize={12} domain={['dataMin - 1', 'dataMax + 1']} />
-            <Tooltip contentStyle={TOOLTIP} />
-            <Legend wrapperStyle={{ fontSize: 12 }} />
-            <Line type="monotone" dataKey="weight" name="scale" stroke="#c9c2ad" dot={{ r: 2 }} strokeWidth={1} connectNulls />
-            <Line type="monotone" dataKey="trend" name="trend" stroke="#da6e52" dot={false} strokeWidth={2.5} connectNulls />
-          </LineChart>
+          <ComposedChart data={m.series}>
+            <Gradient id="fatGrad" color={C.fat} />
+            <CartesianGrid {...gridProps} />
+            <XAxis dataKey="date" {...axisProps} />
+            <YAxis {...axisProps} />
+            <Tooltip content={<ChartTooltip unit="kg" />} />
+            <Area type="monotone" dataKey="cumFat" name="fat lost" stroke={C.fat} strokeWidth={2.5} fill="url(#fatGrad)" />
+          </ComposedChart>
         </ResponsiveContainer>
       </Card>
 
       <Card title="Cumulative energy balance (kcal)">
-        <ResponsiveContainer width="100%" height={220}>
-          <LineChart data={m.series}>
-            <CartesianGrid stroke="#d6d1be" strokeDasharray="3 3" />
-            <XAxis dataKey="date" stroke="#6f6a59" fontSize={12} />
-            <YAxis stroke="#6f6a59" fontSize={12} />
-            <Tooltip contentStyle={TOOLTIP} />
-            <Line type="monotone" dataKey="cumBalance" stroke="#c0863a" dot={false} strokeWidth={2} />
-          </LineChart>
+        <ResponsiveContainer width="100%" height={200}>
+          <ComposedChart data={m.series}>
+            <CartesianGrid {...gridProps} />
+            <XAxis dataKey="date" {...axisProps} />
+            <YAxis {...axisProps} />
+            <Tooltip content={<ChartTooltip unit="kcal" />} />
+            <ReferenceLine y={0} stroke={C.axis} />
+            <Line type="monotone" dataKey="cumBalance" name="net energy" stroke={C.surplus} dot={false} strokeWidth={2} />
+          </ComposedChart>
         </ResponsiveContainer>
         <p className="mt-2 text-xs text-[var(--color-muted)]">
-          Net energy ≈ {m.totalNet.toLocaleString()} kcal · est. mass change{' '}
-          {projectedMassChangeKg(m.totalNet).toFixed(2)} kg over the period.
+          Net ≈ {m.totalNet.toLocaleString()} kcal · est. mass change {projectedMassChangeKg(m.totalNet).toFixed(2)} kg.
         </p>
       </Card>
     </>
@@ -173,31 +241,28 @@ function Charts({ rows, profile }: { rows: DailyLogRow[]; profile: ProfileRow | 
 }
 
 function DashboardInner() {
-  const [rows, setRows] = useState<DailyLogRow[]>([])
-  const [profile, setProfile] = useState<ProfileRow | null>(null)
-  const [error, setError] = useState<string | null>(null)
+  const [range, setRange] = useState(90)
+  const logs = useFetch(() => getLogRange(daysAgo(365), today()), [])
+  const profile = useFetch(() => getCurrentProfile(), [])
 
-  useEffect(() => {
-    Promise.all([getLogRange(daysAgo(90), today()), getCurrentProfile()])
-      .then(([logs, p]) => {
-        setRows(logs)
-        setProfile(p)
-      })
-      .catch((e) => setError(e.message))
-  }, [])
+  if (logs.error) return <p className="text-[var(--color-danger)] text-sm">{logs.error}</p>
+  if (logs.loading) return <p className="text-[var(--color-muted)]">Loading…</p>
 
-  if (error) return <p className="text-[var(--color-danger)] text-sm">{error}</p>
-  if (!rows.length)
+  const allRows = logs.data ?? []
+  if (!allRows.length)
     return <p className="text-[var(--color-muted)]">No logs yet — add one on the Log tab.</p>
+
+  const rows = lastNDays(allRows, range, (r) => r.log_date)
 
   return (
     <div className="flex flex-col gap-5">
-      <Charts rows={rows} profile={profile} />
-      <div>
-        <Button variant="ghost" onClick={() => downloadCsv(`fasttrack-${today()}.csv`, logsToCsv(rows))}>
+      <div className="flex items-center justify-between">
+        <TimeRange value={range} onChange={setRange} />
+        <Button variant="ghost" onClick={() => downloadCsv(`fasttrack-${today()}.csv`, logsToCsv(allRows))}>
           Export CSV
         </Button>
       </div>
+      <Charts rows={rows} profile={profile.data ?? null} />
     </div>
   )
 }

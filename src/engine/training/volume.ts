@@ -54,6 +54,24 @@ export function weeklyVolumeByMuscle(points: VolumePoint[]): {
   }
 }
 
+/** Weekly working-set COUNT per muscle group (hypertrophy dosage metric). */
+export function weeklySetsByMuscle(points: VolumePoint[]): {
+  weeks: { week: string; [muscle: string]: number | string }[]
+  muscles: MuscleGroup[]
+} {
+  const working = points.filter((p) => p.setType !== 'warmup' && p.weightKg != null && p.reps != null)
+  const weeks = sortedWeeks(working)
+  const muscles = [...new Set(working.map((p) => p.muscle))].sort() as MuscleGroup[]
+  const index = new Map(
+    weeks.map((w) => [w, Object.fromEntries(muscles.map((m) => [m, 0])) as Record<string, number>]),
+  )
+  for (const p of working) {
+    const row = index.get(weekStart(p.date))
+    if (row) row[p.muscle] += 1
+  }
+  return { muscles, weeks: weeks.map((week) => ({ week, ...index.get(week)! })) }
+}
+
 export interface ExerciseWeekPoint {
   week: string
   volume: number
