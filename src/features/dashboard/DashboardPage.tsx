@@ -16,9 +16,11 @@ import {
 } from 'recharts'
 import { AuthGate } from '../auth/AuthGate'
 import { useFetch } from '../../lib/useFetch'
-import { getCurrentProfile, getLogRange, getVolumePoints } from '../../db/queries'
+import { getBurnPoints, getCurrentProfile, getLogRange, getVolumePoints } from '../../db/queries'
+import type { BurnPoint } from '../../db/queries'
 import type { DailyLogRow, ProfileRow } from '../../db/types'
 import {
+  burnKcal,
   cumulativeBalance,
   dailyFatLossKg,
   decomposeFastLoss,
@@ -50,12 +52,33 @@ function expenditureFor(profile: ProfileRow | null, weightKg: number | null): nu
   })
 }
 
+/** Group logged sets by their date, as the burn-engine's BurnSet shape. */
+function burnByDateFrom(points: BurnPoint[]): Map<string, { exerciseTitle: string; distanceKm: number | null; durationSeconds: number | null }[]> {
+  const map = new Map<string, { exerciseTitle: string; distanceKm: number | null; durationSeconds: number | null }[]>()
+  for (const p of points) {
+    const list = map.get(p.date) ?? []
+    list.push({ exerciseTitle: p.exerciseTitle, distanceKm: p.distanceKm, durationSeconds: p.durationSeconds })
+    map.set(p.date, list)
+  }
+  return map
+}
+
 function Charts({ rows, profile }: { rows: DailyLogRow[]; profile: ProfileRow | null }) {
+  const burn = useFetch(() => getBurnPoints(), [])
+  const burnByDate = useMemo(() => burnByDateFrom(burn.data ?? []), [burn.data])
   const m = useMemo(() => {
-    const energy = rows.map((r) => ({
-      intake: r.calories_in ?? 0,
-      expenditure: expenditureFor(profile, r.weight_kg),
-    }))
+    // Expenditure is dynamic: a near-baseline TDEE (BMR × profile activity factor)
+    // PLUS the energy from that day's logged exercise (MET model). So a 10 km walk
+    // actually raises the day's burn — and its fat-loss — instead of being invisible.
+    const energy = rows.map((r) => {
+      const baseline = expenditureFor(profile, r.weight_kg)
+      const exercise = r.weight_kg ? burnKcal(burnByDate.get(r.log_date) ?? [], r.weight_kg) : 0
+      return {
+        intake: r.calories_in ?? 0,
+        expenditure: baseline + exercise,
+        exercise,
+      }
+    })
     const cum = cumulativeBalance(energy)
     const trend = weightTrend(
       rows.map((r) => ({ date: r.log_date, weight: r.weight_kg })),
@@ -71,6 +94,7 @@ function Charts({ rows, profile }: { rows: DailyLogRow[]; profile: ProfileRow | 
       const t = trend.series[i].trend
       const intake = energy[i].intake
       const exp = energy[i].expenditure
+      const exercise = energy[i].exercise
       return {
         date: r.log_date.slice(5),
         weight: r.weight_kg,
@@ -80,6 +104,7 @@ function Charts({ rows, profile }: { rows: DailyLogRow[]; profile: ProfileRow | 
         cumBalance: Math.round(cum[i]),
         intake: intake || null,
         expenditure: exp ? Math.round(exp) : null,
+        exercise: exercise ? Math.round(exercise) : null,
         deficitDay: exp > 0 && intake <= exp,
       }
     })
@@ -123,7 +148,7 @@ function Charts({ rows, profile }: { rows: DailyLogRow[]; profile: ProfileRow | 
       avgDeficit,
       recent,
     }
-  }, [rows, profile])
+  }, [rows, profile, burnByDate])
 
   return (
     <>
@@ -182,6 +207,7 @@ function Charts({ rows, profile }: { rows: DailyLogRow[]; profile: ProfileRow | 
                 <Cell key={i} fill={d.deficitDay ? C.deficit : C.surplus} />
               ))}
             </Bar>
+            <Bar dataKey="exercise" name="exercise burn" fill={C.signal} fillOpacity={0.55} />
             <Line type="monotone" dataKey="expenditure" name="expenditure" stroke={C.trend} dot={false} strokeWidth={2} connectNulls />
           </ComposedChart>
         </ResponsiveContainer>
@@ -190,7 +216,8 @@ function Charts({ rows, profile }: { rows: DailyLogRow[]; profile: ProfileRow | 
           <span className="font-mono">
             {Math.abs(m.avgDeficit).toLocaleString()} kcal {m.avgDeficit >= 0 ? 'below' : 'above'}
           </span>{' '}
-          expenditure per day.
+          expenditure per day. Expenditure = baseline TDEE + logged exercise (MET model),
+          so active days raise the line.
         </p>
       </Card>
 

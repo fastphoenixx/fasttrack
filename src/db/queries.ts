@@ -181,6 +181,37 @@ export async function getVolumePoints(): Promise<VolumePoint[]> {
     }))
 }
 
+interface BurnSetWithDate {
+  exercise_title: string
+  distance_km: number | null
+  duration_seconds: number | null
+  workouts: { log_date: string } | null
+}
+
+/** A logged set with the fields needed to estimate energy burn, joined to its date. */
+export interface BurnPoint {
+  date: string
+  exerciseTitle: string
+  distanceKm: number | null
+  durationSeconds: number | null
+}
+
+/** Every set joined to its date — the input for dynamic (activity-aware) expenditure. */
+export async function getBurnPoints(): Promise<BurnPoint[]> {
+  const { data, error } = await db
+    .from('workout_sets')
+    .select('exercise_title,distance_km,duration_seconds,workouts(log_date)')
+  if (error) throw error
+  return ((data ?? []) as unknown as BurnSetWithDate[])
+    .filter((r) => r.workouts?.log_date)
+    .map((r) => ({
+      date: r.workouts!.log_date,
+      exerciseTitle: r.exercise_title,
+      distanceKm: r.distance_km,
+      durationSeconds: r.duration_seconds,
+    }))
+}
+
 /** External hashes already imported, so re-imports skip existing workouts. */
 export async function getImportedHashes(): Promise<Set<string>> {
   const { data, error } = await db.from('workouts').select('external_hash')
