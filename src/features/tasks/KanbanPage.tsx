@@ -167,12 +167,14 @@ function TaskEditor({
   task,
   columns,
   onClose,
-  onSaved,
+  onSave,
+  onDelete,
 }: {
   task: TaskRow
   columns: TaskColumnRow[]
   onClose: () => void
-  onSaved: () => void
+  onSave: (id: string, patch: Partial<TaskInput>) => void
+  onDelete: (id: string) => void
 }) {
   const [f, setF] = useState({
     title: task.title,
@@ -184,17 +186,16 @@ function TaskEditor({
   })
   const set = (patch: Partial<typeof f>) => setF((p) => ({ ...p, ...patch }))
 
-  async function save() {
-    const patch: Partial<TaskInput> = {
+  function save() {
+    onSave(task.id, {
       title: f.title.trim() || task.title,
       description: f.description || null,
       due_date: f.due_date || null,
       urgency: f.urgency,
       assignee: f.assignee || null,
       column_id: f.column_id || null,
-    }
-    await updateTask(task.id, patch)
-    onSaved()
+    })
+    onClose()
   }
 
   return (
@@ -246,7 +247,7 @@ function TaskEditor({
               <Button
                 variant="ghost"
                 className="ml-auto text-[var(--color-danger)]"
-                onClick={async () => { await deleteTask(task.id); onSaved() }}
+                onClick={() => { onDelete(task.id); onClose() }}
               >
                 Delete
               </Button>
@@ -304,36 +305,65 @@ function Board() {
       .filter((t) => t.column_id === col.id || (t.column_id == null && index === 0))
       .sort((a, b) => a.position - b.position || (a.due_date ?? '9999').localeCompare(b.due_date ?? '9999'))
 
-  async function onDrop(columnId: string, droppedId?: string) {
+  // All mutations are optimistic: update local state instantly, fire the write
+  // in the background, and only refetch if the write fails (recovery).
+  function onDrop(columnId: string, droppedId?: string) {
     const id = droppedId || dragId.current
     dragId.current = null
     if (!id) return
     const maxPos = Math.max(0, ...tasks.filter((t) => t.column_id === columnId).map((t) => t.position))
-    await moveTaskToColumn(id, columnId, maxPos + 1)
-    refresh()
+    setTasks((prev) => prev.map((t) => (t.id === id ? { ...t, column_id: columnId, position: maxPos + 1 } : t)))
+    moveTaskToColumn(id, columnId, maxPos + 1).catch(() => refresh())
   }
 
   async function addCard(columnId: string, title: string) {
-    await createTask({ title, column_id: columnId })
-    refresh()
+    try {
+      const row = await createTask({ title, column_id: columnId })
+      setTasks((prev) => [...prev, row])
+    } catch {
+      refresh()
+    }
   }
 
-  async function moveColumn(id: string, dir: -1 | 1) {
+  function saveCard(id: string, patch: Partial<TaskInput>) {
+    setTasks((prev) => prev.map((t) => (t.id === id ? { ...t, ...patch } : t)))
+    updateTask(id, patch).catch(() => refresh())
+  }
+
+  function removeCard(id: string) {
+    setTasks((prev) => prev.filter((t) => t.id !== id))
+    deleteTask(id).catch(() => refresh())
+  }
+
+  function renameCol(id: string, title: string) {
+    setColumns((prev) => prev.map((c) => (c.id === id ? { ...c, title } : c)))
+    updateColumn(id, { title }).catch(() => refresh())
+  }
+
+  function removeCol(id: string) {
+    setColumns((prev) => prev.filter((c) => c.id !== id))
+    deleteColumn(id).catch(() => refresh())
+  }
+
+  function moveColumn(id: string, dir: -1 | 1) {
     const sorted = [...columns].sort((a, b) => a.position - b.position)
     const i = sorted.findIndex((c) => c.id === id)
     const j = i + dir
     if (j < 0 || j >= sorted.length) return
-    await Promise.all([
-      updateColumn(sorted[i].id, { position: sorted[j].position }),
-      updateColumn(sorted[j].id, { position: sorted[i].position }),
-    ])
-    refresh()
+    const pi = sorted[i].position
+    const pj = sorted[j].position
+    setColumns((prev) => prev.map((c) => (c.id === sorted[i].id ? { ...c, position: pj } : c.id === sorted[j].id ? { ...c, position: pi } : c)))
+    Promise.all([updateColumn(sorted[i].id, { position: pj }), updateColumn(sorted[j].id, { position: pi })]).catch(() => refresh())
   }
 
   async function addColumn() {
     const maxPos = Math.max(-1, ...columns.map((c) => c.position))
-    await createColumn('New stage', maxPos + 1)
-    refresh()
+    try {
+      const row = await createColumn('New stage', maxPos + 1)
+      setColumns((prev) => [...prev, row])
+    } catch {
+      refresh()
+    }
   }
 
   return (
@@ -376,8 +406,8 @@ function Board() {
               isLast={i === arr.length - 1}
               onDrop={onDrop}
               onAdd={addCard}
-              onRename={(id, title) => updateColumn(id, { title }).then(refresh)}
-              onDelete={(id) => deleteColumn(id).then(refresh)}
+              onRename={renameCol}
+              onDelete={removeCol}
               onMove={moveColumn}
               onOpen={setEditing}
               onDragStart={(id) => (dragId.current = id)}
@@ -390,10 +420,8 @@ function Board() {
           task={editing}
           columns={columns}
           onClose={() => setEditing(null)}
-          onSaved={() => {
-            setEditing(null)
-            refresh()
-          }}
+          onSave={saveCard}
+          onDelete={removeCard}
         />
       )}
     </div>

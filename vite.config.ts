@@ -10,6 +10,11 @@ export default defineConfig({
     react(),
     tailwindcss(),
     VitePWA({
+      // Self-destroying: ships a SW that unregisters any previously-installed
+      // service worker and clears its caches, then gets out of the way. During
+      // active iteration the precache was serving stale bundles. Re-enable a
+      // caching SW later if offline support becomes a priority.
+      selfDestroying: true,
       registerType: 'autoUpdate',
       manifest: {
         name: 'FastTrack',
