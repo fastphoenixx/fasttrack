@@ -18,7 +18,7 @@ export const C = {
 
 export const axisProps = {
   stroke: C.axis,
-  fontSize: 11,
+  fontSize: 13,
   tickLine: false,
   axisLine: { stroke: C.grid },
 } as const

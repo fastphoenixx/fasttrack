@@ -30,6 +30,12 @@ body,
   height: 100%;
 }
 
+/* Global scale: bumps every rem-based size (text, spacing, max-w containers)
+   so the desktop layout reads large instead of mobile-small. */
+html {
+  font-size: 20px;
+}
+
 body {
   background-color: var(--color-bg);
   color: var(--color-text);

@@ -23,7 +23,7 @@ function Shell({ children }: { children: React.ReactNode }) {
   return (
     <div className="min-h-full flex flex-col">
       <header className="border-b border-[var(--color-border)] bg-[var(--color-surface)]">
-        <div className="mx-auto max-w-5xl flex items-center gap-5 px-4 h-16">
+        <div className="mx-auto max-w-6xl flex items-center gap-5 px-4 h-16">
           <span className="font-display font-bold text-lg tracking-tight">
             Fast<span className="text-[var(--color-accent)]">Track</span>
           </span>
@@ -60,7 +60,7 @@ function Shell({ children }: { children: React.ReactNode }) {
         </div>
       )}
 
-      <main className="flex-1 mx-auto w-full max-w-5xl px-4 py-8">{children}</main>
+      <main className="flex-1 mx-auto w-full max-w-6xl px-4 py-8">{children}</main>
     </div>
   )
 }
