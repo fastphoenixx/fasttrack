@@ -26,16 +26,16 @@ const inputCls =
   'rounded-md bg-[var(--color-bg)] border border-[var(--color-border)] px-3 py-2 ' +
   'text-[var(--color-text)] outline-none focus:border-[var(--color-accent)]'
 
-export function NumberInput(props: React.InputHTMLAttributes<HTMLInputElement>) {
-  return <input type="number" inputMode="decimal" className={inputCls} {...props} />
+export function NumberInput({ className = '', ...props }: React.InputHTMLAttributes<HTMLInputElement>) {
+  return <input type="number" inputMode="decimal" className={`${inputCls} ${className}`} {...props} />
 }
 
-export function TextInput(props: React.InputHTMLAttributes<HTMLInputElement>) {
-  return <input type="text" className={inputCls} {...props} />
+export function TextInput({ className = '', ...props }: React.InputHTMLAttributes<HTMLInputElement>) {
+  return <input type="text" className={`${inputCls} ${className}`} {...props} />
 }
 
-export function Select(props: React.SelectHTMLAttributes<HTMLSelectElement>) {
-  return <select className={inputCls} {...props} />
+export function Select({ className = '', ...props }: React.SelectHTMLAttributes<HTMLSelectElement>) {
+  return <select className={`${inputCls} ${className}`} {...props} />
 }
 
 export function Button({

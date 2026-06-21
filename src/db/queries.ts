@@ -6,6 +6,7 @@ import type {
   FastRow,
   ProfileRow,
   ScreeningRow,
+  TaskColumnRow,
   TaskInput,
   TaskRow,
   TaskStatus,
@@ -113,6 +114,35 @@ export async function moveTask(id: string, status: TaskStatus, position: number)
 
 export async function deleteTask(id: string): Promise<void> {
   const { error } = await db.from('tasks').delete().eq('id', id)
+  if (error) throw error
+}
+
+/** Move a card to a column at a position (the CRM drag-and-drop write). */
+export async function moveTaskToColumn(id: string, columnId: string, position: number): Promise<TaskRow> {
+  return updateTask(id, { column_id: columnId, position })
+}
+
+// --- task columns (CRM board) ---------------------------------------------
+
+export async function listColumns(): Promise<TaskColumnRow[]> {
+  const { data, error } = await db.from('task_columns').select('*').order('position', { ascending: true })
+  if (error) throw error
+  return data ?? []
+}
+
+export async function createColumn(title: string, position: number): Promise<TaskColumnRow> {
+  const { data, error } = await db.from('task_columns').insert({ title, position }).select().single()
+  if (error) throw error
+  return data
+}
+
+export async function updateColumn(id: string, patch: Partial<Pick<TaskColumnRow, 'title' | 'position' | 'color'>>): Promise<void> {
+  const { error } = await db.from('task_columns').update(patch).eq('id', id)
+  if (error) throw error
+}
+
+export async function deleteColumn(id: string): Promise<void> {
+  const { error } = await db.from('task_columns').delete().eq('id', id)
   if (error) throw error
 }
 

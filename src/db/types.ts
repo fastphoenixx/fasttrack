@@ -86,6 +86,7 @@ export interface TaskRow {
   title: string
   description: string | null
   status: TaskStatus
+  column_id: string | null
   due_date: string | null
   urgency: Urgency
   assignee: string | null
@@ -96,6 +97,14 @@ export interface TaskRow {
   created_at: string
   updated_at: string
   completed_at: string | null
+}
+
+export interface TaskColumnRow {
+  id: string
+  title: string
+  position: number
+  color: string | null
+  created_at: string
 }
 
 export interface FastRow {
