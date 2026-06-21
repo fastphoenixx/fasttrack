@@ -16,19 +16,22 @@ import {
 } from 'recharts'
 import { AuthGate } from '../auth/AuthGate'
 import { useFetch } from '../../lib/useFetch'
-import { getCurrentProfile, getLogRange } from '../../db/queries'
+import { getCurrentProfile, getLogRange, getVolumePoints } from '../../db/queries'
 import type { DailyLogRow, ProfileRow } from '../../db/types'
 import {
   cumulativeBalance,
   dailyFatLossKg,
   decomposeFastLoss,
   estimateExpenditure,
+  exerciseList,
   projectedMassChangeKg,
+  weeklyExerciseSeries,
+  weekStart,
   weightTrend,
 } from '../../engine'
 import { today, daysAgo } from '../../lib/dates'
 import { logsToCsv, downloadCsv } from '../data/csv'
-import { Button, Card, Stat } from '../../ui/components'
+import { Button, Card, Select, Stat } from '../../ui/components'
 import { ChartTooltip, Gradient, TimeRange } from '../../ui/charts'
 import { C, axisProps, gridProps, lastNDays } from '../../ui/chart-theme'
 
@@ -240,6 +243,61 @@ function Charts({ rows, profile }: { rows: DailyLogRow[]; profile: ProfileRow | 
   )
 }
 
+/** Cross-domain: did strength hold while bodyweight moved? (FastTrack-unique join.) */
+function StrengthVsWeight({ rows }: { rows: DailyLogRow[] }) {
+  const vp = useFetch(() => getVolumePoints(), [])
+  const points = useMemo(() => vp.data ?? [], [vp.data])
+  const exercises = useMemo(() => exerciseList(points), [points])
+  const [selected, setSelected] = useState('')
+  const current = selected || exercises[0] || ''
+
+  const data = useMemo(() => {
+    if (!current) return []
+    const oneRM = Object.fromEntries(weeklyExerciseSeries(points, current).map((p) => [p.week, p.est1rm]))
+    const weighed = rows.filter((r) => r.weight_kg != null)
+    const weeks = [...new Set([...Object.keys(oneRM), ...weighed.map((r) => weekStart(r.log_date))])].sort()
+    return weeks.map((wk) => {
+      const ws = weighed.filter((r) => weekStart(r.log_date) === wk)
+      const avgW = ws.length ? ws.reduce((s, r) => s + r.weight_kg!, 0) / ws.length : null
+      return {
+        week: wk.slice(5),
+        est1rm: oneRM[wk] ? +oneRM[wk].toFixed(1) : null,
+        weight: avgW == null ? null : +avgW.toFixed(2),
+      }
+    })
+  }, [points, current, rows])
+
+  if (vp.loading || !exercises.length) return null
+
+  return (
+    <Card title="Strength vs bodyweight">
+      <Select value={current} onChange={(e) => setSelected(e.target.value)} className="mb-4">
+        {exercises.map((ex) => (
+          <option key={ex} value={ex}>
+            {ex}
+          </option>
+        ))}
+      </Select>
+      <ResponsiveContainer width="100%" height={260}>
+        <ComposedChart data={data}>
+          <CartesianGrid {...gridProps} />
+          <XAxis dataKey="week" {...axisProps} />
+          <YAxis yAxisId="rm" {...axisProps} domain={['auto', 'auto']} />
+          <YAxis yAxisId="bw" orientation="right" {...axisProps} domain={['dataMin - 1', 'dataMax + 1']} />
+          <Tooltip content={<ChartTooltip />} />
+          <Legend wrapperStyle={{ fontSize: 12 }} />
+          <Line yAxisId="rm" type="monotone" dataKey="est1rm" name="est. 1RM (kg)" stroke={C.trend} strokeWidth={2.5} dot={false} connectNulls />
+          <Line yAxisId="bw" type="monotone" dataKey="weight" name="bodyweight (kg)" stroke={C.fat} strokeWidth={2} dot={false} connectNulls />
+        </ComposedChart>
+      </ResponsiveContainer>
+      <p className="mt-2 text-xs text-[var(--color-muted)]">
+        Strength (left) holding or rising while bodyweight (right) falls = you're keeping muscle through a
+        cut. Only FastTrack can plot this — your lifting and bodyweight live in one place.
+      </p>
+    </Card>
+  )
+}
+
 function DashboardInner() {
   const [range, setRange] = useState(90)
   const logs = useFetch(() => getLogRange(daysAgo(365), today()), [])
@@ -263,6 +321,7 @@ function DashboardInner() {
         </Button>
       </div>
       <Charts rows={rows} profile={profile.data ?? null} />
+      <StrengthVsWeight rows={rows} />
     </div>
   )
 }

@@ -4,22 +4,14 @@ import { AuthGate } from '../auth/AuthGate'
 import { getAllLogs } from '../../db/queries'
 import { downloadCsv, logsToCsv } from '../data/csv'
 import { Button, Card, Stat } from '../../ui/components'
+import { CalendarHeatmap, type HeatCell } from '../../ui/CalendarHeatmap'
 import { useFetch } from '../../lib/useFetch'
 import { today } from '../../lib/dates'
+import { weekStreak } from '../../engine'
 
-/** Consecutive days logged, counting back from today (or yesterday). */
-function currentStreak(datesDesc: string[]): number {
-  if (!datesDesc.length) return 0
-  const set = new Set(datesDesc)
-  const cursor = new Date()
-  // Allow the streak to "start" yesterday if today isn't logged yet.
-  if (!set.has(cursor.toISOString().slice(0, 10))) cursor.setDate(cursor.getDate() - 1)
-  let streak = 0
-  while (set.has(cursor.toISOString().slice(0, 10))) {
-    streak++
-    cursor.setDate(cursor.getDate() - 1)
-  }
-  return streak
+/** 0–4 completeness: weight + calories + water + fasting logged that day. */
+function completeness(r: { weight_kg: number | null; calories_in: number | null; water_ml: number | null; fasting_hours: number | null }): number {
+  return [r.weight_kg, r.calories_in, r.water_ml, r.fasting_hours].filter((v) => v != null).length
 }
 
 const cell = 'px-3 py-2 text-right font-mono tabular-nums'
@@ -33,12 +25,19 @@ function HistoryTable() {
     const dates = rows.map((r) => r.log_date)
     const weights = rows.filter((r) => r.weight_kg != null)
     const first = dates[dates.length - 1]
+    const streak = weekStreak(dates, today())
+    const cells: HeatCell[] = rows.map((r) => ({
+      date: r.log_date,
+      intensity: completeness(r),
+      title: `${r.log_date}: ${completeness(r)}/4 logged`,
+    }))
     return {
       count: rows.length,
-      streak: currentStreak(dates),
+      streak,
       since: first ?? '—',
       loggedToday: dates.includes(today()),
       latestWeight: weights[0]?.weight_kg ?? null,
+      cells,
     }
   }, [rows])
 
@@ -48,10 +47,21 @@ function HistoryTable() {
     <div className="flex flex-col gap-5">
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         <Stat label="Days logged" value={String(stats.count)} />
-        <Stat label="Current streak" value={String(stats.streak)} unit="d" tone="var(--color-accent)" />
-        <Stat label="Tracking since" value={stats.since} />
+        <Stat label="Week streak" value={String(stats.streak.current)} unit="wk" tone="var(--color-accent)" />
+        <Stat label="Best streak" value={String(stats.streak.best)} unit="wk" />
         <Stat label="Latest weight" value={num(stats.latestWeight, 1)} unit="kg" />
       </div>
+
+      {rows.length > 0 && (
+        <Card title="Logging consistency">
+          <CalendarHeatmap cells={stats.cells} weeks={26} />
+          <p className="mt-3 text-xs text-[var(--color-muted)]">
+            Each square is a day; darker = more fields logged (weight · calories · water · fasting).
+            Tracking since <span className="font-mono">{stats.since}</span>. Week-based streak is
+            forgiving — one logged day keeps the week alive.
+          </p>
+        </Card>
+      )}
 
       {!stats.loggedToday && (
         <div className="flex items-center justify-between rounded-xl border border-[var(--color-border)] bg-[var(--color-signal)] px-5 py-4">
