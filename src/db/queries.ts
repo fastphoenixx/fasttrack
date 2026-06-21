@@ -2,6 +2,8 @@ import { db } from './client'
 import type {
   DailyLogInput,
   DailyLogRow,
+  FastInput,
+  FastRow,
   ProfileRow,
   TaskInput,
   TaskRow,
@@ -111,6 +113,43 @@ export async function moveTask(id: string, status: TaskStatus, position: number)
 export async function deleteTask(id: string): Promise<void> {
   const { error } = await db.from('tasks').delete().eq('id', id)
   if (error) throw error
+}
+
+// --- fasts (active timer) -------------------------------------------------
+
+/** The currently-running fast (ended_at null), or null if none. */
+export async function getActiveFast(): Promise<FastRow | null> {
+  const { data, error } = await db
+    .from('fasts')
+    .select('*')
+    .is('ended_at', null)
+    .order('started_at', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+  if (error) throw error
+  return data
+}
+
+export async function startFast(input: FastInput): Promise<FastRow> {
+  const { data, error } = await db.from('fasts').insert(input).select().single()
+  if (error) throw error
+  return data
+}
+
+export async function updateFast(id: string, patch: Partial<FastInput>): Promise<FastRow> {
+  const { data, error } = await db.from('fasts').update(patch).eq('id', id).select().single()
+  if (error) throw error
+  return data
+}
+
+export async function endFast(id: string, endedAt: string, note?: string): Promise<FastRow> {
+  return updateFast(id, { ended_at: endedAt, broke_note: note ?? null })
+}
+
+export async function listFasts(): Promise<FastRow[]> {
+  const { data, error } = await db.from('fasts').select('*').order('started_at', { ascending: false })
+  if (error) throw error
+  return data ?? []
 }
 
 // --- workouts / volume ----------------------------------------------------

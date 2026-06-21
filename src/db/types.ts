@@ -88,6 +88,21 @@ export interface TaskRow {
   completed_at: string | null
 }
 
+export interface FastRow {
+  id: string
+  fast_type: FastType
+  started_at: string
+  target_hours: number | null
+  ended_at: string | null
+  broke_note: string | null
+  created_at: string
+}
+
+export type FastInput = Partial<Omit<FastRow, 'id' | 'created_at'>> & {
+  fast_type: FastType
+  started_at: string
+}
+
 export interface WorkoutRow {
   id: string
   title: string

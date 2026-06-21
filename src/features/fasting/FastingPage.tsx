@@ -11,8 +11,22 @@ import {
   symptomTriage,
   type FastKind,
 } from '../../engine'
-import { Card, Field, NumberInput, Select, Stat } from '../../ui/components'
+import { Button, Card, Field, NumberInput, Select, Stat } from '../../ui/components'
 import { C } from '../../ui/chart-theme'
+import { useFetch } from '../../lib/useFetch'
+import { endFast, getActiveFast, startFast } from '../../db/queries'
+import type { FastRow } from '../../db/types'
+
+/** Format elapsed hours as `Dd HH:MM:SS` (drops the day part under 24h). */
+function formatElapsed(hours: number): string {
+  const total = Math.max(0, Math.floor(hours * 3600))
+  const d = Math.floor(total / 86400)
+  const h = Math.floor((total % 86400) / 3600)
+  const m = Math.floor((total % 3600) / 60)
+  const s = total % 60
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return (d > 0 ? `${d}d ` : '') + `${pad(h)}:${pad(m)}:${pad(s)}`
+}
 
 const SCREEN_KEY = 'ft_screening_v1'
 const FAST_KINDS: FastKind[] = ['extended_water', 'dry', 'religious', 'omad', 'intermittent']
@@ -180,6 +194,114 @@ function RefeedCard({ hours, weightKg, band }: { hours: number; weightKg: number
   )
 }
 
+function FastMode({
+  fast,
+  elapsedHours,
+  onChange,
+}: {
+  fast: FastRow | null
+  elapsedHours: number | null
+  onChange: () => void
+}) {
+  const [kind, setKind] = useState<FastKind>('extended_water')
+  const [target, setTarget] = useState(48)
+  const [startedAt, setStartedAt] = useState('')
+  const [busy, setBusy] = useState(false)
+
+  async function start() {
+    setBusy(true)
+    try {
+      const iso = startedAt ? new Date(startedAt).toISOString() : new Date().toISOString()
+      await startFast({ fast_type: kind, started_at: iso, target_hours: target || null })
+      onChange()
+    } finally {
+      setBusy(false)
+    }
+  }
+  async function breakFast() {
+    if (!fast) return
+    setBusy(true)
+    try {
+      await endFast(fast.id, new Date().toISOString())
+      onChange()
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  if (fast && elapsedHours != null) {
+    const stage = currentStage(elapsedHours)
+    const policy = fastTypePolicy(fast.fast_type)
+    const pct = fast.target_hours ? Math.min(100, (elapsedHours / fast.target_hours) * 100) : null
+    return (
+      <Card title={`Active fast · ${fast.fast_type.replace('_', ' ')}`}>
+        <div className="flex flex-col items-center py-2">
+          <span className="font-mono text-5xl font-medium tabular-nums">{formatElapsed(elapsedHours)}</span>
+          <span className="mt-2 text-sm text-[var(--color-muted)]">
+            {stage.label}
+            {stage.speculative && ' (estimated)'}
+          </span>
+          {pct != null && (
+            <div className="mt-3 w-full max-w-sm">
+              <div className="h-2 rounded-full bg-[var(--color-surface-2)] overflow-hidden">
+                <div className="h-full rounded-full" style={{ width: `${pct}%`, background: C.trend }} />
+              </div>
+              <p className="mt-1 text-center font-mono text-xs text-[var(--color-muted)]">
+                {elapsedHours.toFixed(1)} / {fast.target_hours} h
+              </p>
+            </div>
+          )}
+        </div>
+        {policy.dryCeilingHours != null && elapsedHours > policy.dryCeilingHours && (
+          <p className="mb-3 text-center text-sm text-[var(--color-danger)]">
+            ⚠ Past the ~{policy.dryCeilingHours}h dry-fast safety ceiling — consider breaking.
+          </p>
+        )}
+        <div className="flex items-center justify-center gap-3">
+          <Button onClick={breakFast} disabled={busy}>
+            {busy ? '…' : 'Break fast'}
+          </Button>
+          <span className="font-mono text-xs text-[var(--color-muted)]">
+            started {new Date(fast.started_at).toLocaleString()}
+          </span>
+        </div>
+      </Card>
+    )
+  }
+
+  return (
+    <Card title="Start a fast">
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-3 items-end">
+        <Field label="Type">
+          <Select value={kind} onChange={(e) => setKind(e.target.value as FastKind)}>
+            {FAST_KINDS.map((k) => (
+              <option key={k} value={k}>
+                {k.replace('_', ' ')}
+              </option>
+            ))}
+          </Select>
+        </Field>
+        <Field label="Target hours (optional)">
+          <NumberInput value={target} onChange={(e) => setTarget(+e.target.value)} />
+        </Field>
+        <Field label="Started (blank = now)">
+          <input
+            type="datetime-local"
+            value={startedAt}
+            onChange={(e) => setStartedAt(e.target.value)}
+            className="rounded-md bg-[var(--color-bg)] border border-[var(--color-border)] px-3 py-2"
+          />
+        </Field>
+      </div>
+      <div className="mt-4">
+        <Button onClick={start} disabled={busy}>
+          {busy ? 'Starting…' : 'Start fast'}
+        </Button>
+      </div>
+    </Card>
+  )
+}
+
 function FastingPage() {
   const [selected, setSelected] = useState<string[]>(() => {
     try {
@@ -192,11 +314,23 @@ function FastingPage() {
     localStorage.setItem(SCREEN_KEY, JSON.stringify(selected))
   }, [selected])
 
-  const [kind, setKind] = useState<FastKind>('extended_water')
-  const [hours, setHours] = useState(36)
+  const activeFast = useFetch(() => getActiveFast(), [])
+  const fast = activeFast.data ?? null
+  const [now, setNow] = useState(() => Date.now())
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 1000)
+    return () => clearInterval(id)
+  }, [])
+  const elapsedHours = fast ? (now - Date.parse(fast.started_at)) / 3_600_000 : null
+
+  const [manualKind, setManualKind] = useState<FastKind>('extended_water')
+  const [manualHours, setManualHours] = useState(36)
   const [weightKg, setWeightKg] = useState(80)
   const [waterMl, setWaterMl] = useState(3000)
   const [sodiumMg, setSodiumMg] = useState(1000)
+
+  const kind: FastKind = fast ? (fast.fast_type as FastKind) : manualKind
+  const hours = elapsedHours ?? manualHours
 
   const screening = useMemo(() => scoreScreening(selected), [selected])
   const policy = fastTypePolicy(kind)
@@ -206,22 +340,28 @@ function FastingPage() {
     <div className="flex flex-col gap-5">
       <h1 className="text-xl font-bold">Fasting</h1>
 
+      <FastMode fast={fast} elapsedHours={elapsedHours} onChange={activeFast.refetch} />
+
       <ScreeningCard selected={selected} onChange={setSelected} />
 
-      <Card title="Your fast">
+      <Card title={fast ? 'Context for advice' : 'Your fast (manual)'}>
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-          <Field label="Type">
-            <Select value={kind} onChange={(e) => setKind(e.target.value as FastKind)}>
-              {FAST_KINDS.map((k) => (
-                <option key={k} value={k}>
-                  {k.replace('_', ' ')}
-                </option>
-              ))}
-            </Select>
-          </Field>
-          <Field label="Hours fasted">
-            <NumberInput value={hours} onChange={(e) => setHours(+e.target.value)} />
-          </Field>
+          {!fast && (
+            <>
+              <Field label="Type">
+                <Select value={manualKind} onChange={(e) => setManualKind(e.target.value as FastKind)}>
+                  {FAST_KINDS.map((k) => (
+                    <option key={k} value={k}>
+                      {k.replace('_', ' ')}
+                    </option>
+                  ))}
+                </Select>
+              </Field>
+              <Field label="Hours fasted">
+                <NumberInput value={manualHours} onChange={(e) => setManualHours(+e.target.value)} />
+              </Field>
+            </>
+          )}
           <Field label="Weight (kg)">
             <NumberInput value={weightKg} onChange={(e) => setWeightKg(+e.target.value)} />
           </Field>
@@ -236,7 +376,7 @@ function FastingPage() {
             </>
           )}
         </div>
-        {policy.dryCeilingHours != null && hours > policy.dryCeilingHours && (
+        {!fast && policy.dryCeilingHours != null && hours > policy.dryCeilingHours && (
           <p className="mt-3 text-sm text-[var(--color-danger)]">
             ⚠ Past the ~{policy.dryCeilingHours}h safety ceiling for a dry fast — strongly consider breaking it.
           </p>
