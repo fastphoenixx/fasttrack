@@ -4,10 +4,25 @@ import {
   currentStage,
   electrolyteTargets,
   fastTypePolicy,
+  gki,
   hyponatremiaRisk,
+  ketosisZone,
   refeedPlan,
   symptomTriage,
 } from './fasting-safety'
+
+describe('biomarkers', () => {
+  it('classifies ketosis zones by BHB', () => {
+    expect(ketosisZone(0.2)).toBe('none')
+    expect(ketosisZone(0.7)).toBe('light')
+    expect(ketosisZone(2.0)).toBe('nutritional')
+    expect(ketosisZone(3.5)).toBe('deep')
+  })
+  it('computes GKI and suppresses it below ketosis', () => {
+    expect(gki(72, 2.0)).toBeCloseTo(2.0, 1) // (72/18)/2 = 2
+    expect(gki(90, 0.3)).toBeNull()
+  })
+})
 
 describe('scoreScreening', () => {
   it('bands a clean profile as low (advice unlocked)', () => {

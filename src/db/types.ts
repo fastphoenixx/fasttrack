@@ -66,9 +66,19 @@ export interface DailyLogRow {
   electrolytes: Electrolytes
   micronutrients: Micronutrients
   training: unknown[]
+  measured_bhb_mmol: number | null
+  measured_glucose_mgdl: number | null
   notes: string | null
   created_at: string
   updated_at: string
+}
+
+export interface ScreeningRow {
+  id: string
+  items: string[]
+  score: number
+  band: 'low' | 'moderate' | 'high'
+  created_at: string
 }
 
 export interface TaskRow {

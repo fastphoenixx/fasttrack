@@ -136,6 +136,27 @@ export function refeedPlan(fastDays: number, weightKg: number, band: RiskBand): 
   }
 }
 
+// --- biomarkers -----------------------------------------------------------
+export type KetosisZone = 'none' | 'light' | 'nutritional' | 'deep'
+
+/** Blood-ketone (BHB) zone. Honest labels — measured, not the "autophagy" myth. */
+export function ketosisZone(bhbMmol: number): KetosisZone {
+  if (bhbMmol < 0.5) return 'none'
+  if (bhbMmol < 1.0) return 'light'
+  if (bhbMmol < 3.0) return 'nutritional'
+  return 'deep'
+}
+
+/**
+ * Glucose-Ketone Index = (glucose mmol/L) ÷ BHB mmol/L. Lower = deeper
+ * therapeutic ketosis (Seyfried). Null below nutritional ketosis (BHB < 0.4),
+ * where the ratio isn't meaningful. glucose in mg/dL (÷18 → mmol/L).
+ */
+export function gki(glucoseMgdl: number, bhbMmol: number): number | null {
+  if (bhbMmol < 0.4) return null
+  return Math.round(((glucoseMgdl / 18) / bhbMmol) * 10) / 10
+}
+
 // --- symptom triage -------------------------------------------------------
 export type SymptomTier = 'ok' | 'deficiency' | 'hardstop'
 export interface SymptomVerdict {

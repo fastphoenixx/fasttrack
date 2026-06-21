@@ -5,6 +5,7 @@ import type {
   FastInput,
   FastRow,
   ProfileRow,
+  ScreeningRow,
   TaskInput,
   TaskRow,
   TaskStatus,
@@ -112,6 +113,26 @@ export async function moveTask(id: string, status: TaskStatus, position: number)
 
 export async function deleteTask(id: string): Promise<void> {
   const { error } = await db.from('tasks').delete().eq('id', id)
+  if (error) throw error
+}
+
+// --- screening (persisted medical gate) -----------------------------------
+
+/** Newest screening result (the current one), or null if never screened. */
+export async function getLatestScreening(): Promise<ScreeningRow | null> {
+  const { data, error } = await db
+    .from('screening')
+    .select('*')
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+  if (error) throw error
+  return data
+}
+
+/** Save a new screening version (history is kept). */
+export async function saveScreening(items: string[], score: number, band: string): Promise<void> {
+  const { error } = await db.from('screening').insert({ items, score, band })
   if (error) throw error
 }
 

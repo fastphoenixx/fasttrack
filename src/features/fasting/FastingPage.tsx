@@ -1,11 +1,13 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   SCREENING_ITEMS,
   currentStage,
   electrolyteTargets,
   FAST_STAGES,
   fastTypePolicy,
+  gki,
   hyponatremiaRisk,
+  ketosisZone,
   refeedPlan,
   scoreScreening,
   symptomTriage,
@@ -14,8 +16,9 @@ import {
 import { Button, Card, Field, NumberInput, Select, Stat } from '../../ui/components'
 import { C } from '../../ui/chart-theme'
 import { useFetch } from '../../lib/useFetch'
-import { endFast, getActiveFast, startFast } from '../../db/queries'
+import { endFast, getActiveFast, getLatestScreening, getLog, saveScreening, startFast, upsertLog } from '../../db/queries'
 import type { FastRow } from '../../db/types'
+import { today } from '../../lib/dates'
 
 /** Format elapsed hours as `Dd HH:MM:SS` (drops the day part under 24h). */
 function formatElapsed(hours: number): string {
@@ -194,6 +197,92 @@ function RefeedCard({ hours, weightKg, band }: { hours: number; weightKg: number
   )
 }
 
+function BiomarkerCard() {
+  const todayLog = useFetch(() => getLog(today()), [])
+  const [bhb, setBhb] = useState('')
+  const [glucose, setGlucose] = useState('')
+  const [status, setStatus] = useState<string | null>(null)
+  useEffect(() => {
+    const r = todayLog.data
+    if (!r) return
+    // Hydrate the form from today's loaded record.
+    /* eslint-disable react-hooks/set-state-in-effect */
+    setBhb(r.measured_bhb_mmol?.toString() ?? '')
+    setGlucose(r.measured_glucose_mgdl?.toString() ?? '')
+    /* eslint-enable react-hooks/set-state-in-effect */
+  }, [todayLog.data])
+
+  const bhbN = bhb === '' ? null : +bhb
+  const gluN = glucose === '' ? null : +glucose
+  const zone = bhbN != null ? ketosisZone(bhbN) : null
+  const idx = bhbN != null && gluN != null ? gki(gluN, bhbN) : null
+
+  async function save() {
+    setStatus('Saving…')
+    try {
+      await upsertLog({ log_date: today(), measured_bhb_mmol: bhbN, measured_glucose_mgdl: gluN })
+      setStatus('Logged ✓')
+    } catch (e) {
+      setStatus((e as Error).message)
+    }
+  }
+
+  return (
+    <Card title="Biomarkers (measured)">
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 items-end">
+        <Field label="Blood ketones (mmol/L)">
+          <NumberInput step="0.1" value={bhb} onChange={(e) => setBhb(e.target.value)} />
+        </Field>
+        <Field label="Glucose (mg/dL)">
+          <NumberInput value={glucose} onChange={(e) => setGlucose(e.target.value)} />
+        </Field>
+        <Button onClick={save}>Log today</Button>
+        {status && <span className="text-sm text-[var(--color-muted)]">{status}</span>}
+      </div>
+      <div className="grid grid-cols-2 md:grid-cols-3 gap-4 mt-4 pt-4 border-t border-[var(--color-border)]">
+        <Stat label="Ketosis" value={zone ?? '—'} tone={C.fat} />
+        <Stat label="GKI" value={idx == null ? '—' : String(idx)} />
+      </div>
+      <p className="mt-3 text-xs text-[var(--color-muted)]">
+        Honest error bars: fingerstick BHB ±15%; glucose meters are unreliable below ~80 mg/dL (exactly the
+        fasting range) — a low reading with symptoms = treat as possible hypo. GKI shown only in ketosis
+        (BHB ≥ 0.4). Urine ketone strips drift with hydration.
+      </p>
+    </Card>
+  )
+}
+
+function PrepCard({ kind }: { kind: FastKind }) {
+  const policy = fastTypePolicy(kind)
+  return (
+    <Card title="Prep — 24–48h before">
+      {policy.hydrationAdvice ? (
+        <ul className="text-sm flex flex-col gap-1 list-disc list-inside">
+          <li>Optional light taper: lower carbs the day before to ease the glycogen drop.</li>
+          <li>Pre-stock electrolytes (LMNT / snake juice / Lite Salt) so day 1 isn't a scramble.</li>
+          <li>Front-load water and have a solid last meal with protein + sodium.</li>
+        </ul>
+      ) : (
+        <ul className="text-sm flex flex-col gap-1 list-disc list-inside">
+          <li>
+            <strong>Hydration-LOAD</strong> well before the window — you can't drink during a dry/religious fast.
+          </li>
+          <li>
+            <strong>Cut sodium &amp; spicy food</strong> ~24h before (reduces thirst during the fast — the
+            opposite of a water fast).
+          </li>
+          <li>Taper caffeine over the prior days to avoid withdrawal headaches.</li>
+          <li>Pre-measure any permitted rescue sip (e.g. a halachic cheekful) ahead of time.</li>
+        </ul>
+      )}
+      <p className="mt-3 text-xs text-[var(--color-muted)]">
+        Sodium guidance literally inverts by fast type — water fasts supplement <em>during</em>; dry/religious
+        fasts cut <em>before</em>.
+      </p>
+    </Card>
+  )
+}
+
 function FastMode({
   fast,
   elapsedHours,
@@ -314,6 +403,25 @@ function FastingPage() {
     localStorage.setItem(SCREEN_KEY, JSON.stringify(selected))
   }, [selected])
 
+  // Persist screening to the DB (cross-device, owned). Load latest on mount;
+  // save (debounced) only on real user edits so the load doesn't echo back.
+  const dirty = useRef(false)
+  useEffect(() => {
+    getLatestScreening()
+      .then((r) => r && setSelected(r.items))
+      .catch(() => {})
+  }, [])
+  useEffect(() => {
+    if (!dirty.current) return
+    const res = scoreScreening(selected)
+    const id = setTimeout(() => saveScreening(selected, res.score, res.band).catch(() => {}), 800)
+    return () => clearTimeout(id)
+  }, [selected])
+  const changeScreening = (keys: string[]) => {
+    dirty.current = true
+    setSelected(keys)
+  }
+
   const activeFast = useFetch(() => getActiveFast(), [])
   const fast = activeFast.data ?? null
   const [now, setNow] = useState(() => Date.now())
@@ -342,7 +450,7 @@ function FastingPage() {
 
       <FastMode fast={fast} elapsedHours={elapsedHours} onChange={activeFast.refetch} />
 
-      <ScreeningCard selected={selected} onChange={setSelected} />
+      <ScreeningCard selected={selected} onChange={changeScreening} />
 
       <Card title={fast ? 'Context for advice' : 'Your fast (manual)'}>
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
@@ -383,7 +491,11 @@ function FastingPage() {
         )}
       </Card>
 
+      {!fast && <PrepCard kind={kind} />}
+
       <StageTimeline hours={hours} />
+
+      <BiomarkerCard />
 
       {adviceOn ? (
         <>
